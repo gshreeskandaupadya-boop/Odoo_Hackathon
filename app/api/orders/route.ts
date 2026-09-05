@@ -9,6 +9,28 @@ const orderSchema = z.object({
   confirmedById: z.number().int().positive(),
 });
 
+// GET /api/orders
+export async function GET() {
+  try {
+    const orders = await db.orm.public.Order
+      .orderBy((order) => order.createdAt.desc())
+      .all();
+
+    return NextResponse.json({
+      success: true,
+      orders,
+    });
+  } catch (error) {
+    console.error("Get orders error:", error);
+
+    return NextResponse.json(
+      { error: "Failed to fetch orders" },
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/orders
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -126,7 +148,10 @@ export async function POST(request: Request) {
 
     if (totalShortage === 0) {
       orderStatus = "FULFILLED";
-    } else if (hasPartialFulfillment || allAllocations.length > 0) {
+    } else if (
+      hasPartialFulfillment ||
+      allAllocations.length > 0
+    ) {
       orderStatus = "PARTIALLY_FULFILLED";
     } else {
       orderStatus = "BACKORDERED";
@@ -167,7 +192,8 @@ export async function POST(request: Request) {
         await db.orm.public.Inventory
           .where({ id: inventory.id })
           .update({
-            reserved: inventory.reserved + allocation.quantity,
+            reserved:
+              inventory.reserved + allocation.quantity,
           });
       }
     }
@@ -221,3 +247,4 @@ export async function POST(request: Request) {
     );
   }
 }
+

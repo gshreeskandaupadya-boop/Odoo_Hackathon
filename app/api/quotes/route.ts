@@ -18,6 +18,28 @@ const quoteSchema = z.object({
     .min(1),
 });
 
+// GET /api/quotes
+export async function GET() {
+  try {
+    const quotes = await db.orm.public.Quote
+      .orderBy((quote) => quote.createdAt.desc())
+      .all();
+
+    return NextResponse.json({
+      success: true,
+      quotes,
+    });
+  } catch (error) {
+    console.error("Get quotes error:", error);
+
+    return NextResponse.json(
+      { error: "Failed to fetch quotes" },
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/quotes
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -62,7 +84,9 @@ export async function POST(request: Request) {
 
     if (missingProduct) {
       return NextResponse.json(
-        { error: `Product ${missingProduct.item.productId} not found` },
+        {
+          error: `Product ${missingProduct.item.productId} not found`,
+        },
         { status: 404 }
       );
     }
@@ -70,6 +94,7 @@ export async function POST(request: Request) {
     const quoteItems = products.map(({ item, product }) => {
       const unitPrice = product!.sellingPrice;
       const grossTotal = unitPrice * item.quantity;
+
       const discountAmount = Math.round(
         grossTotal * (item.discountPct / 100)
       );
@@ -97,7 +122,9 @@ export async function POST(request: Request) {
     const discountAmount = subtotal - totalAmount;
 
     const discountPct =
-      subtotal === 0 ? 0 : (discountAmount / subtotal) * 100;
+      subtotal === 0
+        ? 0
+        : (discountAmount / subtotal) * 100;
 
     const costTotal = quoteItems.reduce(
       (sum, item) => sum + item.costTotal,
@@ -107,7 +134,9 @@ export async function POST(request: Request) {
     const marginAmount = totalAmount - costTotal;
 
     const marginPct =
-      totalAmount === 0 ? 0 : (marginAmount / totalAmount) * 100;
+      totalAmount === 0
+        ? 0
+        : (marginAmount / totalAmount) * 100;
 
     const allowedDiscountPct = Math.max(
       ...products.map(
@@ -128,7 +157,9 @@ export async function POST(request: Request) {
       quoteNumber,
       customerId: customer[0].id,
       createdById: user[0].id,
-      status: risk.approvalRequired ? "PENDING_APPROVAL" : "APPROVED",
+      status: risk.approvalRequired
+        ? "PENDING_APPROVAL"
+        : "APPROVED",
       subtotal,
       discountAmount,
       totalAmount,

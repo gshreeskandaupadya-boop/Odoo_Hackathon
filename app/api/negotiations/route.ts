@@ -171,3 +171,56 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function GET() {
+  try {
+    const negotiations = await db.orm.public.Negotiation
+      .orderBy((negotiation) => negotiation.createdAt.desc())
+      .all();
+
+    const negotiationsWithDetails = await Promise.all(
+      negotiations.map(async (negotiation) => {
+        const [quotes, users] = await Promise.all([
+          db.orm.public.Quote
+            .where({ id: negotiation.quoteId })
+            .all(),
+
+          db.orm.public.User
+            .where({ id: negotiation.createdById })
+            .all(),
+        ]);
+
+        const quote = quotes[0];
+
+        let customer = null;
+
+        if (quote) {
+          const customers = await db.orm.public.Customer
+            .where({ id: quote.customerId })
+            .all();
+
+          customer = customers[0] ?? null;
+        }
+
+        return {
+          ...negotiation,
+          quote: quote ?? null,
+          customer,
+          createdBy: users[0] ?? null,
+        };
+      })
+    );
+
+    return NextResponse.json({
+      success: true,
+      negotiations: negotiationsWithDetails,
+    });
+  } catch (error) {
+    console.error("Get negotiations error:", error);
+
+    return NextResponse.json(
+      { error: "Failed to fetch negotiations" },
+      { status: 500 }
+    );
+  }
+}

@@ -8,9 +8,45 @@ export async function GET() {
       .where({ status: "PENDING" })
       .all();
 
+    const approvalsWithDetails = await Promise.all(
+      approvals.map(async (approval) => {
+        const quotes = await db.orm.public.Quote
+          .where({ id: approval.quoteId })
+          .all();
+
+        const quote = quotes[0];
+
+        if (!quote) {
+          return {
+            ...approval,
+            quote: null,
+            customer: null,
+            salesRep: null,
+          };
+        }
+
+        const [customers, users] = await Promise.all([
+          db.orm.public.Customer
+            .where({ id: quote.customerId })
+            .all(),
+
+          db.orm.public.User
+            .where({ id: quote.createdById })
+            .all(),
+        ]);
+
+        return {
+          ...approval,
+          quote,
+          customer: customers[0] ?? null,
+          salesRep: users[0] ?? null,
+        };
+      })
+    );
+
     return NextResponse.json({
       success: true,
-      approvals,
+      approvals: approvalsWithDetails,
     });
   } catch (error) {
     console.error("Get approvals error:", error);
