@@ -1,0 +1,11 @@
+{
+  "name": "@dealflow360/backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "db:init": "prisma db init",
+    "db:seed": "node --experimental-strip-types prisma/seed.ts",
+    "contract:emit": "prisma contract emit"
+  }
+}
