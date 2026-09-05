@@ -1,0 +1,251 @@
+// use prisma-next
+enum UserRole {
+  SALES_REP
+  SALES_MANAGER
+  FINANCE
+  ADMIN
+}
+
+enum CustomerTier {
+  STANDARD
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum QuoteStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  NEGOTIATION
+  ORDERED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ApprovalLevel {
+  MANAGER
+  FINANCE
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum NegotiationStatus {
+  OPEN
+  ACCEPTED
+  REJECTED
+}
+
+enum OrderStatus {
+  CONFIRMED
+  PROCESSING
+  PARTIALLY_FULFILLED
+  FULFILLED
+  BACKORDERED
+  CANCELLED
+}
+
+model User {
+  id              Int                        @id @default(autoincrement())
+  email           String                     @unique
+  passwordHash    String
+  name            String
+  role            UserRole                   @default(SALES_REP)
+  createdAt       TimestamptzString          @default(now())
+  updatedAt       temporal.updatedAtString()
+
+  quotes          Quote[]
+  approvals       Approval[]
+  negotiations    Negotiation[]
+  confirmedOrders Order[]
+  auditLogs       AuditLog[]
+}
+
+model Customer {
+  id        Int                        @id @default(autoincrement())
+  name      String
+  company   String
+  email     String                     @unique
+  tier      CustomerTier               @default(STANDARD)
+  createdAt TimestamptzString          @default(now())
+  updatedAt temporal.updatedAtString()
+
+  quotes    Quote[]
+  orders    Order[]
+}
+
+model Product {
+  id                 Int                        @id @default(autoincrement())
+  sku                String                     @unique
+  name               String
+  category           String
+  description        String?
+  sellingPrice       Int
+  costPrice          Int
+  allowedDiscountPct Int                        @default(5)
+  active             Boolean                    @default(true)
+  createdAt          TimestamptzString          @default(now())
+  updatedAt          temporal.updatedAtString()
+
+  quoteItems         QuoteItem[]
+  inventory          Inventory[]
+  orderAllocations   OrderAllocation[]
+}
+
+model Warehouse {
+  id               Int                        @id @default(autoincrement())
+  name             String
+  location         String
+  createdAt        TimestamptzString          @default(now())
+  updatedAt        temporal.updatedAtString()
+
+  inventory        Inventory[]
+  orderAllocations OrderAllocation[]
+}
+
+model Inventory {
+  id          Int                        @id @default(autoincrement())
+  productId   Int
+  warehouseId Int
+  quantity    Int                        @default(0)
+  reserved    Int                        @default(0)
+  createdAt   TimestamptzString          @default(now())
+  updatedAt   temporal.updatedAtString()
+
+  product     Product                    @relation(fields:[productId], references:[id])
+  warehouse   Warehouse                  @relation(fields:[warehouseId], references:[id])
+
+  @@unique([productId, warehouseId])
+}
+
+model Quote {
+  id             Int                        @id @default(autoincrement())
+  quoteNumber    String                     @unique
+  customerId     Int
+  createdById    Int
+  status         QuoteStatus                @default(DRAFT)
+
+  subtotal       Int                        @default(0)
+  discountAmount Int                        @default(0)
+  totalAmount    Int                        @default(0)
+  discountPct    Int                        @default(0)
+  marginAmount   Int                        @default(0)
+
+  riskLevel      RiskLevel                  @default(LOW)
+  riskReason     String?
+
+  createdAt      TimestamptzString          @default(now())
+  updatedAt      temporal.updatedAtString()
+
+  customer       Customer                   @relation(fields:[customerId], references:[id])
+  createdBy      User                       @relation(fields:[createdById], references:[id])
+
+  items          QuoteItem[]
+  approvals      Approval[]
+  negotiations   Negotiation[]
+  order          Order?
+}
+
+model QuoteItem {
+  id          Int     @id @default(autoincrement())
+  quoteId     Int
+  productId   Int
+  quantity    Int
+  unitPrice   Int
+  discountPct Int     @default(0)
+  lineTotal   Int
+
+  quote       Quote   @relation(fields:[quoteId], references:[id])
+  product     Product @relation(fields:[productId], references:[id])
+
+  @@unique([quoteId, productId])
+}
+
+model Approval {
+  id                   Int                @id @default(autoincrement())
+  quoteId              Int
+  approverId           Int?
+  level                ApprovalLevel
+  status               ApprovalStatus     @default(PENDING)
+
+  requestedDiscountPct Int
+  allowedDiscountPct   Int
+  riskLevel            RiskLevel
+  reason               String
+
+  round                Int                @default(1)
+  decidedAt            TimestamptzString?
+  createdAt            TimestamptzString  @default(now())
+
+  quote                Quote              @relation(fields:[quoteId], references:[id])
+  approver             User?              @relation(fields:[approverId], references:[id])
+}
+
+model Negotiation {
+  id                  Int                        @id @default(autoincrement())
+  quoteId             Int
+  createdById         Int
+  proposedDiscountPct Int
+  proposedTotal       Int
+  message             String?
+  status              NegotiationStatus          @default(OPEN)
+  createdAt           TimestamptzString          @default(now())
+  updatedAt           temporal.updatedAtString()
+
+  quote               Quote                      @relation(fields:[quoteId], references:[id])
+  createdBy           User                       @relation(fields:[createdById], references:[id])
+}
+
+model Order {
+  id            Int                        @id @default(autoincrement())
+  orderNumber   String                     @unique
+  quoteId       Int                        @unique
+  customerId    Int
+  confirmedById Int?
+  status        OrderStatus                @default(CONFIRMED)
+
+  totalAmount   Int
+  shortageQty   Int                        @default(0)
+
+  createdAt     TimestamptzString          @default(now())
+  updatedAt     temporal.updatedAtString()
+
+  quote         Quote                      @relation(fields:[quoteId], references:[id])
+  customer      Customer                   @relation(fields:[customerId], references:[id])
+  confirmedBy   User?                      @relation(fields:[confirmedById], references:[id])
+
+  allocations   OrderAllocation[]
+}
+
+model OrderAllocation {
+  id          Int       @id @default(autoincrement())
+  orderId     Int
+  productId   Int
+  warehouseId Int
+  quantity    Int
+
+  order       Order     @relation(fields:[orderId], references:[id])
+  product     Product   @relation(fields:[productId], references:[id])
+  warehouse   Warehouse @relation(fields:[warehouseId], references:[id])
+}
+
+model AuditLog {
+  id         Int               @id @default(autoincrement())
+  actorId    Int?
+  action     String
+  entityType String
+  entityId   Int
+  details    String?
+  createdAt  TimestamptzString @default(now())
+
+  actor      User?             @relation(fields:[actorId], references:[id])
+}
