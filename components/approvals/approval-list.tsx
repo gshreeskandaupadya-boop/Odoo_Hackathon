@@ -1,287 +1,433 @@
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+"use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import {
+Card,
+CardContent,
+CardHeader,
+CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/status-badge";
-import { Eye } from "lucide-react";
+import {
+Eye,
+Loader2,
+CheckCircle2,
+XCircle,
+} from "lucide-react";
 
-const approvals = [
-  {
-    id: "Q-1025",
-    customer: "ABC Corporation",
-    amount: 156750,
-    discount: 8,
-    risk: "pending" as const,
-    date: "Sep 5, 2026",
-    type: "Approval",
-  },
-  {
-    id: "Q-1024",
-    customer: "XYZ Limited",
-    amount: 85000,
-    discount: 5,
-    risk: "draft" as const,
-    date: "Sep 5, 2026",
-    type: "Approval",
-  },
-  {
-    id: "Q-1023",
-    customer: "PQR Private Ltd",
-    amount: 204000,
-    discount: 15,
-    risk: "high-risk" as const,
-    date: "Sep 4, 2026",
-    type: "Approval",
-  },
-  {
-    id: "Q-1026",
-    customer: "ABC Corporation",
-    amount: 156750,
-    discount: 22,
-    previousDiscount: 18,
-    risk: "high-risk" as const,
-    date: "Sep 5, 2026",
-    type: "Re-approval",
-  },
-];
+type Approval = {
+id: number;
+level: "MANAGER" | "FINANCE";
+status: "PENDING" | "APPROVED" | "REJECTED";
+requestedDiscountPct: number;
+allowedDiscountPct: number;
+riskLevel: "LOW" | "MEDIUM" | "HIGH";
+reason: string;
+round: number;
+createdAt: string;
+quote: {
+id: number;
+quoteNumber: string;
+totalAmount: number;
+discountPct: number;
+status: string;
+customer: {
+id: number;
+name: string;
+company: string;
+tier: string;
+};
+};
+approver?: {
+id: number;
+name: string;
+role: string;
+} | null;
+};
 
 export default function ApprovalList() {
-  const pendingApprovals = approvals.length;
+const [approvals, setApprovals] = useState<Approval[]>([]);
+const [loading, setLoading] = useState(true);
+const [actionId, setActionId] = useState<number | null>(null);
+const [error, setError] = useState("");
+const [message, setMessage] = useState("");
 
-  const highRiskApprovals = approvals.filter(
-    (approval) => approval.risk === "high-risk"
-  ).length;
+async function loadApprovals() {
+try {
+setLoading(true);
+setError("");
 
-  const totalValue = approvals.reduce(
-    (total, approval) => total + approval.amount,
-    0
+
+  const response = await fetch("/api/approvals");
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch approvals.");
+  }
+
+  const data = await response.json();
+
+  setApprovals(data.approvals ?? []);
+} catch (err) {
+  console.error(err);
+  setError("Unable to load approvals.");
+} finally {
+  setLoading(false);
+}
+
+
+}
+
+useEffect(() => {
+loadApprovals();
+}, []);
+
+async function handleDecision(
+approvalId: number,
+status: "APPROVED" | "REJECTED"
+) {
+try {
+setActionId(approvalId);
+setError("");
+setMessage("");
+
+
+  const response = await fetch(
+    `/api/approvals/${approvalId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        status,
+        approverId: status === "APPROVED" ? 2 : 2,
+      }),
+    }
   );
 
-  return (
-    <div className="space-y-6">
+  const data = await response.json();
 
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          Approvals
-        </h1>
+  if (!response.ok) {
+    throw new Error(
+      data.error || "Failed to update approval."
+    );
+  }
 
-        <p className="mt-1 text-sm text-gray-500">
-          Review quotations waiting for approval.
+  setMessage(
+    status === "APPROVED"
+      ? "Approval granted successfully."
+      : "Approval rejected successfully."
+  );
+
+  await loadApprovals();
+} catch (err) {
+  console.error(err);
+  setError(
+    err instanceof Error
+      ? err.message
+      : "Failed to update approval."
+  );
+} finally {
+  setActionId(null);
+}
+
+
+}
+
+const pendingApprovals = useMemo(
+() =>
+approvals.filter(
+(approval) => approval.status === "PENDING"
+),
+[approvals]
+);
+
+const highRiskApprovals = useMemo(
+() =>
+pendingApprovals.filter(
+(approval) => approval.riskLevel === "HIGH"
+).length,
+[pendingApprovals]
+);
+
+const totalValue = useMemo(
+() =>
+pendingApprovals.reduce(
+(total, approval) =>
+total + approval.quote.totalAmount,
+0
+),
+[pendingApprovals]
+);
+
+function formatCurrency(amount: number) {
+return `₹${amount.toLocaleString("en-IN")}`;
+}
+
+function formatDate(date: string) {
+return new Date(date).toLocaleDateString("en-IN", {
+day: "2-digit",
+month: "short",
+year: "numeric",
+});
+}
+
+function formatRisk(risk: Approval["riskLevel"]) {
+if (risk === "HIGH") return "high-risk";
+if (risk === "MEDIUM") return "pending";
+return "approved";
+}
+
+return ( <div className="space-y-6"> <div> <h1 className="text-3xl font-bold tracking-tight">
+Approvals </h1>
+
+
+    <p className="mt-1 text-sm text-gray-500">
+      Review quotations waiting for approval.
+    </p>
+  </div>
+
+  {error && (
+    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+      {error}
+    </div>
+  )}
+
+  {message && (
+    <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+      {message}
+    </div>
+  )}
+
+  <div className="grid gap-4 md:grid-cols-3">
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-gray-500">
+          Pending Approvals
+        </CardTitle>
+      </CardHeader>
+
+      <CardContent>
+        <p className="text-3xl font-bold">
+          {pendingApprovals.length}
         </p>
-      </div>
+      </CardContent>
+    </Card>
 
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-gray-500">
+          High Risk
+        </CardTitle>
+      </CardHeader>
 
-      {/* Summary */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <CardContent>
+        <p className="text-3xl font-bold">
+          {highRiskApprovals}
+        </p>
+      </CardContent>
+    </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Pending Approvals
-            </CardTitle>
-          </CardHeader>
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-gray-500">
+          Total Value
+        </CardTitle>
+      </CardHeader>
 
-          <CardContent>
-            <p className="text-3xl font-bold">
-              {pendingApprovals}
+      <CardContent>
+        <p className="text-3xl font-bold">
+          {formatCurrency(totalValue)}
+        </p>
+      </CardContent>
+    </Card>
+  </div>
+
+  <Card>
+    <CardHeader>
+      <CardTitle>
+        Quotes Requiring Review
+      </CardTitle>
+    </CardHeader>
+
+    <CardContent>
+      <div className="overflow-hidden rounded-lg border">
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2
+              size={24}
+              className="animate-spin text-gray-500"
+            />
+          </div>
+        ) : pendingApprovals.length === 0 ? (
+          <div className="py-16 text-center">
+            <CheckCircle2
+              size={32}
+              className="mx-auto text-green-500"
+            />
+
+            <p className="mt-3 font-medium text-gray-700">
+              No pending approvals
             </p>
-          </CardContent>
-        </Card>
 
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              High Risk
-            </CardTitle>
-          </CardHeader>
-
-          <CardContent>
-            <p className="text-3xl font-bold">
-              {highRiskApprovals}
+            <p className="mt-1 text-sm text-gray-500">
+              All quotations have been reviewed.
             </p>
-          </CardContent>
-        </Card>
+          </div>
+        ) : (
+          <table className="w-full">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Quote
+                </th>
 
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Customer
+                </th>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">
-              Total Value
-            </CardTitle>
-          </CardHeader>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Amount
+                </th>
 
-          <CardContent>
-            <p className="text-3xl font-bold">
-              ₹{totalValue.toLocaleString("en-IN")}
-            </p>
-          </CardContent>
-        </Card>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Discount
+                </th>
 
-      </div>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Risk
+                </th>
 
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                  Date
+                </th>
 
-      {/* Approval Table */}
-      <Card>
+                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500">
+                  Action
+                </th>
+              </tr>
+            </thead>
 
-        <CardHeader>
-          <CardTitle>
-            Quotes Requiring Review
-          </CardTitle>
-        </CardHeader>
+            <tbody>
+              {pendingApprovals.map((approval) => (
+                <tr
+                  key={approval.id}
+                  className="border-t hover:bg-gray-50"
+                >
+                  <td className="px-4 py-4">
+                    <div className="font-medium">
+                      {approval.quote.quoteNumber}
+                    </div>
 
-        <CardContent>
+                    {approval.round > 1 && (
+                      <span className="text-xs text-orange-600">
+                        Re-approval · Round {approval.round}
+                      </span>
+                    )}
+                  </td>
 
-          <div className="overflow-hidden rounded-lg border">
+                  <td className="px-4 py-4 text-sm">
+                    {approval.quote.customer.company}
+                  </td>
 
-            <table className="w-full">
+                  <td className="px-4 py-4 text-sm font-medium">
+                    {formatCurrency(
+                      approval.quote.totalAmount
+                    )}
+                  </td>
 
-              <thead className="bg-gray-50">
+                  <td className="px-4 py-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">
+                        {approval.requestedDiscountPct}%
+                      </span>
 
-                <tr>
+                      <span className="text-xs text-gray-400">
+                        limit {approval.allowedDiscountPct}%
+                      </span>
+                    </div>
+                  </td>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Quote
-                  </th>
-
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Customer
-                  </th>
-
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Amount
-                  </th>
-
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Discount
-                  </th>
-
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Risk
-                  </th>
-
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Date
-                  </th>
-
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500">
-                    Action
-                  </th>
-
-                </tr>
-
-              </thead>
-
-
-              <tbody>
-
-                {approvals.map((approval) => (
-
-                  <tr
-                    key={approval.id}
-                    className="border-t hover:bg-gray-50"
-                  >
-
-                    {/* Quote */}
-                    <td className="px-4 py-4">
-                      <div className="font-medium">
-                        {approval.id}
-                      </div>
-
-                      {approval.type === "Re-approval" && (
-                        <span className="text-xs text-orange-600">
-                          Re-approval
-                        </span>
+                  <td className="px-4 py-4">
+                    <StatusBadge
+                      status={formatRisk(
+                        approval.riskLevel
                       )}
-                    </td>
+                    />
+                  </td>
 
+                  <td className="px-4 py-4 text-sm text-gray-500">
+                    {formatDate(approval.createdAt)}
+                  </td>
 
-                    {/* Customer */}
-                    <td className="px-4 py-4 text-sm">
-                      {approval.customer}
-                    </td>
-
-
-                    {/* Amount */}
-                    <td className="px-4 py-4 text-sm font-medium">
-                      ₹{approval.amount.toLocaleString("en-IN")}
-                    </td>
-
-
-                    {/* Discount */}
-                    <td className="px-4 py-4 text-sm">
-                      {approval.type === "Re-approval" ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-400 line-through">
-                            {approval.previousDiscount}%
-                          </span>
-
-                          <span className="font-semibold text-orange-600">
-                            {approval.discount}%
-                          </span>
-                        </div>
-                      ) : (
-                        `${approval.discount}%`
-                      )}
-                    </td>
-
-
-                    {/* Risk */}
-                    <td className="px-4 py-4">
-                      <div className="flex flex-col gap-1">
-                        <StatusBadge status={approval.risk} />
-
-                        {approval.type === "Re-approval" && (
-                          <span className="text-xs font-medium text-orange-600">
-                            Re-approval Required
-                          </span>
-                        )}
-                      </div>
-                    </td>
-
-
-                    {/* Date */}
-                    <td className="px-4 py-4 text-sm text-gray-500">
-                      {approval.date}
-                    </td>
-
-
-                    {/* Action */}
-                    <td className="px-4 py-4 text-right">
-
+                  <td className="px-4 py-4 text-right">
+                    <div className="flex justify-end gap-2">
                       <Button
                         variant="outline"
                         size="sm"
                         asChild
                       >
-                        <Link href={`/approvals/${approval.id}`}>
+                        <Link
+                          href={`/quotes/${approval.quote.id}`}
+                        >
                           <Eye size={16} />
                           Review
                         </Link>
                       </Button>
 
-                    </td>
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          handleDecision(
+                            approval.id,
+                            "APPROVED"
+                          )
+                        }
+                        disabled={
+                          actionId === approval.id
+                        }
+                      >
+                        {actionId === approval.id ? (
+                          <Loader2
+                            size={16}
+                            className="mr-1 animate-spin"
+                          />
+                        ) : (
+                          <CheckCircle2 size={16} />
+                        )}
+                        Approve
+                      </Button>
 
-                  </tr>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          handleDecision(
+                            approval.id,
+                            "REJECTED"
+                          )
+                        }
+                        disabled={
+                          actionId === approval.id
+                        }
+                      >
+                        <XCircle size={16} />
+                        Reject
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </CardContent>
+  </Card>
+</div>
 
-                ))}
 
-              </tbody>
-
-            </table>
-
-          </div>
-
-        </CardContent>
-
-      </Card>
-
-    </div>
-  );
+);
 }

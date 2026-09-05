@@ -1,221 +1,261 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
-
 import { db } from "@/src/lib/db";
-import { calculateDiscountRisk } from "@/src/services/discount-engine";
 
-const quoteSchema = z.object({
-  customerId: z.number().int().positive(),
-  createdById: z.number().int().positive(),
-  items: z
-    .array(
-      z.object({
-        productId: z.number().int().positive(),
-        quantity: z.number().int().positive(),
-        discountPct: z.number().min(0).max(100),
-      })
-    )
-    .min(1),
-});
-
-// GET /api/quotes
 export async function GET() {
   try {
     const quotes = await db.orm.public.Quote
       .orderBy((quote) => quote.createdAt.desc())
       .all();
 
+    const quotesWithRelations = await Promise.all(
+      quotes.map(async (quote) => {
+        const customers = await db.orm.public.Customer
+          .where({ id: quote.customerId })
+          .all();
+
+        const users = await db.orm.public.User
+          .where({ id: quote.createdById })
+          .all();
+
+        return {
+          ...quote,
+          customer: customers[0] ?? null,
+          createdBy: users[0] ?? null,
+        };
+      })
+    );
+
     return NextResponse.json({
       success: true,
-      quotes,
+      quotes: quotesWithRelations,
     });
   } catch (error) {
     console.error("Get quotes error:", error);
 
     return NextResponse.json(
-      { error: "Failed to fetch quotes" },
+      {
+        success: false,
+        error: "Failed to fetch quotes",
+      },
       { status: 500 }
     );
   }
 }
 
-// POST /api/quotes
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const input = quoteSchema.parse(body);
 
-    const customer = await db.orm.public.Customer
-      .where({ id: input.customerId })
-      .all();
+    const {
+      customerId,
+      createdById,
+      items,
+      discountPct = 0,
+    } = body;
 
-    const user = await db.orm.public.User
-      .where({ id: input.createdById })
-      .all();
-
-    if (!customer[0]) {
+    if (
+      !customerId ||
+      !createdById ||
+      !Array.isArray(items) ||
+      items.length === 0
+    ) {
       return NextResponse.json(
-        { error: "Customer not found" },
+        {
+          success: false,
+          error: "Customer, creator and at least one item are required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const customers = await db.orm.public.Customer
+      .where({ id: Number(customerId) })
+      .all();
+
+    const users = await db.orm.public.User
+      .where({ id: Number(createdById) })
+      .all();
+
+    const customer = customers[0];
+    const user = users[0];
+
+    if (!customer) {
+      return NextResponse.json(
+        { error: "Customer not found." },
         { status: 404 }
       );
     }
 
-    if (!user[0]) {
+    if (!user) {
       return NextResponse.json(
-        { error: "User not found" },
+        { error: "User not found." },
         { status: 404 }
       );
     }
+
+    const productIds = items.map((item: { productId: number }) =>
+      Number(item.productId)
+    );
 
     const products = await Promise.all(
-      input.items.map(async (item) => {
+      productIds.map(async (productId: number) => {
         const result = await db.orm.public.Product
-          .where({ id: item.productId })
+          .where({ id: productId })
           .all();
 
-        return {
-          item,
-          product: result[0],
-        };
+        return result[0];
       })
     );
 
-    const missingProduct = products.find(({ product }) => !product);
+    const missingProduct = products.find((product) => !product);
 
     if (missingProduct) {
       return NextResponse.json(
-        {
-          error: `Product ${missingProduct.item.productId} not found`,
-        },
+        { error: "One or more products were not found." },
         { status: 404 }
       );
     }
 
-    const quoteItems = products.map(({ item, product }) => {
-      const unitPrice = product!.sellingPrice;
-      const grossTotal = unitPrice * item.quantity;
+    let subtotal = 0;
+    let totalCost = 0;
 
-      const discountAmount = Math.round(
-        grossTotal * (item.discountPct / 100)
-      );
+    const quoteItems = items.map(
+      (
+        item: {
+          productId: number;
+          quantity: number;
+          unitPrice?: number;
+          discountPct?: number;
+        },
+        index: number
+      ) => {
+        const product = products[index]!;
 
-      return {
-        productId: product!.id,
-        quantity: item.quantity,
-        unitPrice,
-        discountPct: item.discountPct,
-        lineTotal: grossTotal - discountAmount,
-        costTotal: product!.costPrice * item.quantity,
-      };
-    });
+        const quantity = Number(item.quantity);
+        const unitPrice = Number(
+          item.unitPrice ?? product.sellingPrice
+        );
+        const lineDiscountPct = Number(
+          item.discountPct ?? discountPct
+        );
 
-    const subtotal = quoteItems.reduce(
-      (sum, item) => sum + item.unitPrice * item.quantity,
-      0
+        const grossAmount = quantity * unitPrice;
+        const lineDiscount = Math.round(
+          (grossAmount * lineDiscountPct) / 100
+        );
+
+        const lineTotal = grossAmount - lineDiscount;
+
+        subtotal += grossAmount;
+        totalCost += quantity * product.costPrice;
+
+        return {
+          productId: product.id,
+          quantity,
+          unitPrice,
+          discountPct: lineDiscountPct,
+          lineTotal,
+        };
+      }
     );
 
-    const totalAmount = quoteItems.reduce(
-      (sum, item) => sum + item.lineTotal,
-      0
+    const discountAmount = Math.round(
+      (subtotal * Number(discountPct)) / 100
     );
 
-    const discountAmount = subtotal - totalAmount;
+    const totalAmount = subtotal - discountAmount;
 
-    const discountPct =
-      subtotal === 0
-        ? 0
-        : (discountAmount / subtotal) * 100;
-
-    const costTotal = quoteItems.reduce(
-      (sum, item) => sum + item.costTotal,
-      0
-    );
-
-    const marginAmount = totalAmount - costTotal;
+    const marginAmount = totalAmount - totalCost;
 
     const marginPct =
-      totalAmount === 0
-        ? 0
-        : (marginAmount / totalAmount) * 100;
+      totalAmount > 0
+        ? (marginAmount / totalAmount) * 100
+        : 0;
 
     const allowedDiscountPct = Math.max(
       ...products.map(
-        ({ product }) => product!.allowedDiscountPct
+        (product) => product!.allowedDiscountPct
       )
     );
 
+    const {
+      calculateDiscountRisk,
+    } = await import("@/src/services/discount-engine");
+
     const risk = calculateDiscountRisk({
-      customerTier: customer[0].tier,
-      requestedDiscountPct: discountPct,
+      customerTier: customer.tier,
+      requestedDiscountPct: Number(discountPct),
       allowedDiscountPct,
       marginPct,
+      previousApprovalCount: 0,
     });
 
     const quoteNumber = `Q-${Date.now()}`;
 
     const quote = await db.orm.public.Quote.create({
       quoteNumber,
-      customerId: customer[0].id,
-      createdById: user[0].id,
+      customerId: customer.id,
+      createdById: user.id,
       status: risk.approvalRequired
         ? "PENDING_APPROVAL"
         : "APPROVED",
       subtotal,
       discountAmount,
       totalAmount,
-      discountPct: Math.round(discountPct),
+      discountPct: Number(discountPct),
       marginAmount,
       riskLevel: risk.riskLevel,
       riskReason: risk.reason,
     });
 
-    for (const item of quoteItems) {
-      await db.orm.public.QuoteItem.create({
+    await db.orm.public.QuoteItem.createAll(
+      quoteItems.map((item) => ({
+        ...item,
         quoteId: quote.id,
-        productId: item.productId,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discountPct: item.discountPct,
-        lineTotal: item.lineTotal,
-      });
-    }
+      }))
+    );
 
     if (risk.approvalRequired) {
       await db.orm.public.Approval.create({
         quoteId: quote.id,
+        approverId: null,
         level: risk.approvalLevel!,
         status: "PENDING",
-        requestedDiscountPct: Math.round(discountPct),
+        requestedDiscountPct: Number(discountPct),
         allowedDiscountPct,
         riskLevel: risk.riskLevel,
         reason: risk.reason,
+        round: 1,
       });
     }
 
     return NextResponse.json(
       {
         success: true,
-        quote,
-        risk,
+        quote: {
+          ...quote,
+          customer,
+          createdBy: user,
+          risk: {
+            riskLevel: risk.riskLevel,
+            reason: risk.reason,
+            approvalRequired: risk.approvalRequired,
+            approvalLevel: risk.approvalLevel,
+          },
+        },
       },
       { status: 201 }
     );
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        {
-          error: "Invalid request",
-          details: error.issues,
-        },
-        { status: 400 }
-      );
-    }
-
     console.error("Create quote error:", error);
 
     return NextResponse.json(
-      { error: "Failed to create quote" },
+      {
+        success: false,
+        error: "Failed to create quote",
+      },
       { status: 500 }
     );
   }
 }
+

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   Card,
@@ -12,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+
 import {
   Select,
   SelectContent,
@@ -20,26 +22,247 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { Plus, Trash2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+} from "lucide-react";
+
+type Customer = {
+  id: number;
+  name: string;
+  company: string;
+  email: string;
+  tier: string;
+};
+
+type Product = {
+  id: number;
+  sku: string;
+  name: string;
+  category: string;
+  sellingPrice: number;
+  costPrice: number;
+  allowedDiscountPct: number;
+};
+
+type QuoteProduct = {
+  id: number;
+  productId: number;
+  quantity: number;
+  price: number;
+};
+
+type RiskResult = {
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  riskReason: string;
+  approvalRequired: boolean;
+  approvalLevel: "MANAGER" | "FINANCE" | null;
+};
 
 export default function QuoteBuilder() {
-  const [products, setProducts] = useState([
-  {
-    id: 1,
-    name: "Laptop",
-    quantity: 2,
-    price: 50000,
-  },
-  {
-    id: 2,
-    name: "Monitor",
-    quantity: 1,
-    price: 15000,
-  },
-]);
+  const router = useRouter();
+
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
+
+  const [customerId, setCustomerId] = useState("");
+  const [products, setProducts] = useState<QuoteProduct[]>([]);
+
+  const [discountPct, setDiscountPct] = useState(5);
+
+  const [loadingData, setLoadingData] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [risk, setRisk] = useState<RiskResult | null>(null);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [customersResponse, productsResponse] = await Promise.all([
+          fetch("/api/customers"),
+          fetch("/api/products"),
+        ]);
+
+        if (!customersResponse.ok || !productsResponse.ok) {
+          throw new Error("Failed to load quote data.");
+        }
+
+        const customersData = await customersResponse.json();
+        const productsData = await productsResponse.json();
+
+        setCustomers(customersData.customers ?? []);
+        setAvailableProducts(productsData.products ?? []);
+      } catch (err) {
+        console.error(err);
+        setError("Unable to load customers and products.");
+      } finally {
+        setLoadingData(false);
+      }
+    }
+
+    loadData();
+  }, []);
+
+  const subtotal = useMemo(() => {
+    return products.reduce(
+      (total, product) => total + product.quantity * product.price,
+      0
+    );
+  }, [products]);
+
+  const discountAmount = useMemo(() => {
+    return Math.round((subtotal * discountPct) / 100);
+  }, [subtotal, discountPct]);
+
+  const total = subtotal - discountAmount;
+
+  function addProduct() {
+    const unusedProduct = availableProducts.find(
+      (product) =>
+        !products.some((selected) => selected.productId === product.id)
+    );
+
+    if (!unusedProduct) return;
+
+    setProducts([
+      ...products,
+      {
+        id: Date.now(),
+        productId: unusedProduct.id,
+        quantity: 1,
+        price: unusedProduct.sellingPrice,
+      },
+    ]);
+  }
+
+  function updateProduct(productRowId: number, productId: number) {
+    const selectedProduct = availableProducts.find(
+      (product) => product.id === productId
+    );
+
+    if (!selectedProduct) return;
+
+    setProducts(
+      products.map((product) =>
+        product.id === productRowId
+          ? {
+              ...product,
+              productId: selectedProduct.id,
+              price: selectedProduct.sellingPrice,
+            }
+          : product
+      )
+    );
+  }
+
+  function updateQuantity(productRowId: number, quantity: number) {
+    setProducts(
+      products.map((product) =>
+        product.id === productRowId
+          ? {
+              ...product,
+              quantity: Math.max(1, quantity),
+            }
+          : product
+      )
+    );
+  }
+
+  function removeProduct(productRowId: number) {
+    setProducts(
+      products.filter((product) => product.id !== productRowId)
+    );
+  }
+
+  async function submitQuote() {
+    setError("");
+    setSuccess("");
+    setRisk(null);
+
+    if (!customerId) {
+      setError("Please select a customer.");
+      return;
+    }
+
+    if (products.length === 0) {
+      setError("Please add at least one product.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      const response = await fetch("/api/quotes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customerId: Number(customerId),
+          createdById: 1,
+          discountPct,
+          items: products.map((product) => ({
+            productId: product.productId,
+            quantity: product.quantity,
+            unitPrice: product.price,
+            discountPct,
+          })),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create quote.");
+      }
+
+      setRisk({
+        riskLevel: data.quote.riskLevel,
+        riskReason: data.quote.riskReason,
+        approvalRequired: data.quote.status === "PENDING_APPROVAL",
+        approvalLevel: data.quote.approvals?.[0]?.level ?? null,
+      });
+
+      setSuccess(
+        data.quote.status === "PENDING_APPROVAL"
+          ? "Quote created and sent for approval."
+          : "Quote created and approved automatically."
+      );
+
+      setTimeout(() => {
+        router.push("/quotes");
+        router.refresh();
+      }, 1200);
+    } catch (err) {
+      console.error(err);
+      setError(
+        err instanceof Error ? err.message : "Failed to create quote."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const selectedCustomer = customers.find(
+    (customer) => customer.id === Number(customerId)
+  );
+
+  const riskIcon =
+    risk?.riskLevel === "HIGH" ? (
+      <AlertTriangle size={20} className="mt-0.5 text-red-600" />
+    ) : risk?.riskLevel === "MEDIUM" ? (
+      <AlertTriangle size={20} className="mt-0.5 text-yellow-600" />
+    ) : (
+      <CheckCircle2 size={20} className="mt-0.5 text-green-600" />
+    );
+
   return (
     <div className="space-y-6">
-
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">
@@ -51,6 +274,18 @@ export default function QuoteBuilder() {
         </p>
       </div>
 
+      {/* Messages */}
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {success}
+        </div>
+      )}
 
       {/* Customer */}
       <Card>
@@ -60,39 +295,43 @@ export default function QuoteBuilder() {
 
         <CardContent>
           <div className="max-w-xl space-y-2">
+            <Label>Customer</Label>
 
-            <Label>
-              Customer
-            </Label>
-
-            <Select>
+            <Select
+              value={customerId}
+              onValueChange={setCustomerId}
+              disabled={loadingData}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="Select customer" />
+                <SelectValue
+                  placeholder={
+                    loadingData
+                      ? "Loading customers..."
+                      : "Select customer"
+                  }
+                />
               </SelectTrigger>
 
               <SelectContent>
-                <SelectItem value="abc">
-                  ABC Corporation
-                </SelectItem>
-
-                <SelectItem value="xyz">
-                  XYZ Limited
-                </SelectItem>
-
-                <SelectItem value="pqr">
-                  PQR Private Ltd
-                </SelectItem>
-
-                <SelectItem value="lmn">
-                  LMN Corporation
-                </SelectItem>
+                {customers.map((customer) => (
+                  <SelectItem
+                    key={customer.id}
+                    value={String(customer.id)}
+                  >
+                    {customer.company} — {customer.tier}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
 
+            {selectedCustomer && (
+              <p className="text-xs text-gray-500">
+                {selectedCustomer.name} · {selectedCustomer.email}
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
-
 
       {/* Products */}
       <Card>
@@ -105,143 +344,147 @@ export default function QuoteBuilder() {
             </p>
           </div>
 
-          <Button variant="outline">
+          <Button
+            variant="outline"
+            onClick={addProduct}
+            disabled={
+              loadingData ||
+              products.length >= availableProducts.length
+            }
+          >
             <Plus size={16} />
             Add Product
           </Button>
         </CardHeader>
 
-
         <CardContent>
+          {products.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-8 text-center">
+              <p className="text-sm text-gray-500">
+                No products added yet.
+              </p>
 
-          <div className="overflow-hidden rounded-lg border">
+              <Button
+                variant="outline"
+                className="mt-3"
+                onClick={addProduct}
+                disabled={loadingData}
+              >
+                <Plus size={16} />
+                Add Product
+              </Button>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                      Product
+                    </th>
 
-            <table className="w-full">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                      Quantity
+                    </th>
 
-              <thead className="bg-gray-50">
-                <tr>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                      Unit Price
+                    </th>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Product
-                  </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
+                      Total
+                    </th>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Quantity
-                  </th>
+                    <th className="w-10" />
+                  </tr>
+                </thead>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Unit Price
-                  </th>
+                <tbody>
+                  {products.map((product) => (
+                    <tr
+                      key={product.id}
+                      className="border-t"
+                    >
+                      <td className="px-4 py-3">
+                        <Select
+                          value={String(product.productId)}
+                          onValueChange={(value) =>
+                            updateProduct(
+                              product.id,
+                              Number(value)
+                            )
+                          }
+                        >
+                          <SelectTrigger className="min-w-[220px]">
+                            <SelectValue />
+                          </SelectTrigger>
 
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500">
-                    Total
-                  </th>
+                          <SelectContent>
+                            {availableProducts.map(
+                              (availableProduct) => (
+                                <SelectItem
+                                  key={availableProduct.id}
+                                  value={String(
+                                    availableProduct.id
+                                  )}
+                                >
+                                  {availableProduct.name}
+                                </SelectItem>
+                              )
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </td>
 
-                  <th className="w-10"></th>
+                      <td className="px-4 py-3">
+                        <Input
+                          type="number"
+                          min="1"
+                          value={product.quantity}
+                          onChange={(event) =>
+                            updateQuantity(
+                              product.id,
+                              Number(event.target.value)
+                            )
+                          }
+                          className="w-24"
+                        />
+                      </td>
 
-                </tr>
-              </thead>
+                      <td className="px-4 py-3">
+                        ₹
+                        {product.price.toLocaleString("en-IN")}
+                      </td>
 
+                      <td className="px-4 py-3 font-medium">
+                        ₹
+                        {(
+                          product.quantity * product.price
+                        ).toLocaleString("en-IN")}
+                      </td>
 
-              <tbody>
-  {products.map((product) => (
-    <tr key={product.id} className="border-t">
-
-      {/* Product */}
-      <td className="px-4 py-3">
-        <Input
-          value={product.name}
-          onChange={(e) => {
-            setProducts(
-              products.map((item) =>
-                item.id === product.id
-                  ? { ...item, name: e.target.value }
-                  : item
-              )
-            );
-          }}
-        />
-      </td>
-
-      {/* Quantity */}
-      <td className="px-4 py-3">
-        <Input
-          type="number"
-          min="1"
-          value={product.quantity}
-          onChange={(e) => {
-            setProducts(
-              products.map((item) =>
-                item.id === product.id
-                  ? {
-                      ...item,
-                      quantity: Number(e.target.value),
-                    }
-                  : item
-              )
-            );
-          }}
-          className="w-24"
-        />
-      </td>
-
-      {/* Unit Price */}
-      <td className="px-4 py-3">
-        <Input
-          type="number"
-          min="0"
-          value={product.price}
-          onChange={(e) => {
-            setProducts(
-              products.map((item) =>
-                item.id === product.id
-                  ? {
-                      ...item,
-                      price: Number(e.target.value),
-                    }
-                  : item
-              )
-            );
-          }}
-          className="w-32"
-        />
-      </td>
-
-      {/* Total */}
-      <td className="px-4 py-3 font-medium">
-        ₹{(product.quantity * product.price).toLocaleString("en-IN")}
-      </td>
-
-      {/* Delete */}
-      <td className="px-4 py-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => {
-            setProducts(
-              products.filter((item) => item.id !== product.id)
-            );
-          }}
-        >
-          <Trash2 size={16} />
-        </Button>
-      </td>
-
-    </tr>
-  ))}
-</tbody>
-
-            </table>
-
-          </div>
-
+                      <td className="px-4 py-3">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            removeProduct(product.id)
+                          }
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-
       {/* Pricing + Risk */}
       <div className="grid gap-6 lg:grid-cols-2">
-
         {/* Pricing */}
         <Card>
           <CardHeader>
@@ -249,40 +492,44 @@ export default function QuoteBuilder() {
           </CardHeader>
 
           <CardContent className="space-y-5">
-
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">
                 Subtotal
               </span>
 
               <span className="font-medium">
-                ₹1,15,000
+                ₹{subtotal.toLocaleString("en-IN")}
               </span>
             </div>
 
-
             <div className="space-y-2">
-
-              <Label>
-                Discount
-              </Label>
+              <Label>Discount</Label>
 
               <div className="flex items-center gap-2">
-
                 <Input
                   type="number"
-                  defaultValue="5"
+                  min="0"
+                  max="100"
+                  value={discountPct}
+                  onChange={(event) =>
+                    setDiscountPct(
+                      Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          Number(event.target.value)
+                        )
+                      )
+                    )
+                  }
                   className="w-24"
                 />
 
                 <span className="text-sm text-gray-500">
                   %
                 </span>
-
               </div>
-
             </div>
-
 
             <div className="flex justify-between text-sm">
               <span className="text-gray-500">
@@ -290,121 +537,130 @@ export default function QuoteBuilder() {
               </span>
 
               <span>
-                ₹5,750
+                ₹{discountAmount.toLocaleString("en-IN")}
               </span>
             </div>
 
-
             <div className="border-t pt-4">
-
               <div className="flex justify-between">
-
                 <span className="font-semibold">
                   Total
                 </span>
 
                 <span className="text-xl font-bold">
-                  ₹1,09,250
+                  ₹{total.toLocaleString("en-IN")}
                 </span>
-
               </div>
-
             </div>
-
           </CardContent>
         </Card>
-
 
         {/* Risk */}
         <Card>
-
           <CardHeader>
-            <CardTitle>
-              Risk Assessment
-            </CardTitle>
+            <CardTitle>Risk Assessment</CardTitle>
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {!risk ? (
+              <>
+                <div className="flex items-start gap-3 rounded-lg border p-4">
+                  <CheckCircle2
+                    size={20}
+                    className="mt-0.5 text-green-600"
+                  />
 
-            <div className="flex items-start gap-3 rounded-lg border p-4">
+                  <div>
+                    <p className="text-sm font-medium">
+                      Quote ready for assessment
+                    </p>
 
-              <CheckCircle2
-                size={20}
-                className="mt-0.5 text-green-600"
-              />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Submit the quote to run the backend
+                      discount and risk engine.
+                    </p>
+                  </div>
+                </div>
 
-              <div>
-                <p className="text-sm font-medium">
-                  Discount within allowed range
-                </p>
+                <div className="flex items-start gap-3 rounded-lg border p-4">
+                  <CheckCircle2
+                    size={20}
+                    className="mt-0.5 text-green-600"
+                  />
 
-                <p className="mt-1 text-xs text-gray-500">
-                  Current discount is 5%.
-                </p>
+                  <div>
+                    <p className="text-sm font-medium">
+                      Customer verification
+                    </p>
+
+                    <p className="mt-1 text-xs text-gray-500">
+                      {selectedCustomer
+                        ? `${selectedCustomer.tier} customer selected.`
+                        : "Select a customer to continue."}
+                    </p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex items-start gap-3 rounded-lg border p-4">
+                {riskIcon}
+
+                <div>
+                  <p className="text-sm font-medium">
+                    {risk.riskLevel} Risk
+                  </p>
+
+                  <p className="mt-1 text-xs text-gray-500">
+                    {risk.riskReason}
+                  </p>
+
+                  {risk.approvalRequired && (
+                    <p className="mt-2 text-xs font-semibold text-orange-600">
+                      Approval required
+                      {risk.approvalLevel
+                        ? ` · ${risk.approvalLevel}`
+                        : ""}
+                    </p>
+                  )}
+                </div>
               </div>
-
-            </div>
-
-
-            <div className="flex items-start gap-3 rounded-lg border p-4">
-
-              <CheckCircle2
-                size={20}
-                className="mt-0.5 text-green-600"
-              />
-
-              <div>
-                <p className="text-sm font-medium">
-                  Customer verification passed
-                </p>
-
-                <p className="mt-1 text-xs text-gray-500">
-                  No customer risk flags detected.
-                </p>
-              </div>
-
-            </div>
-
-
-            <div className="flex items-start gap-3 rounded-lg border p-4">
-
-              <AlertTriangle
-                size={20}
-                className="mt-0.5 text-yellow-600"
-              />
-
-              <div>
-                <p className="text-sm font-medium">
-                  Approval required
-                </p>
-
-                <p className="mt-1 text-xs text-gray-500">
-                  This quote must be reviewed before submission.
-                </p>
-              </div>
-
-            </div>
-
+            )}
           </CardContent>
-
         </Card>
-
       </div>
-
 
       {/* Actions */}
       <div className="flex justify-end gap-3 border-t pt-6">
-
-        <Button variant="outline">
-          Save Draft
+        <Button
+          variant="outline"
+          onClick={() => router.push("/quotes")}
+          disabled={submitting}
+        >
+          Cancel
         </Button>
 
-        <Button>
-          Submit for Approval
+        <Button
+          onClick={submitQuote}
+          disabled={
+            submitting ||
+            loadingData ||
+            !customerId ||
+            products.length === 0
+          }
+        >
+          {submitting ? (
+            <>
+              <Loader2
+                size={16}
+                className="mr-2 animate-spin"
+              />
+              Creating Quote...
+            </>
+          ) : (
+            "Submit Quote"
+          )}
         </Button>
-
       </div>
-
     </div>
   );
 }
