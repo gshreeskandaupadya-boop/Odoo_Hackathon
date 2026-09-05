@@ -1,8 +1,8 @@
 import Sidebar from "@/components/sidebar";
 import Navbar from "@/components/navbar";
-import DashboardOverview from "@/components/dashboard/overview";
+import QuoteList from "@/components/quotes/quote-list";
 
-export default function Home() {
+export default function QuotesPage() {
   return (
     <div className="flex min-h-screen bg-gray-50">
 
@@ -13,7 +13,7 @@ export default function Home() {
         <Navbar />
 
         <main className="flex-1 p-8">
-          <DashboardOverview />
+          <QuoteList />
         </main>
 
       </div>
